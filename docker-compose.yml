@@ -1,3 +1,4 @@
+name: mimo2api-fix
 services:
   mimo2api-fix:
     build: .
