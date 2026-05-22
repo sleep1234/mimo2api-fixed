@@ -1,55 +1,18 @@
-# ===== 构建阶段 =====
-FROM node:24-alpine AS builder
+FROM node:22-slim
 
 WORKDIR /app
 
-# 先复制依赖文件，利用缓存
-COPY package.json package-lock.json ./
+COPY package*.json ./
+RUN npm install
 
-# 安装所有依赖（包括 devDependencies）
-RUN npm ci
+COPY . .
+RUN npx tsc
 
-# 复制源码和配置
-COPY tsconfig.json ./
-COPY src ./src
+RUN npm prune --production
 
-# 构建项目
-RUN npm run build
+EXPOSE 4003
 
-# 清理 devDependencies
-RUN npm prune --omit=dev && \
-    npm cache clean --force
-
-# 清理生产依赖中运行时不需要的文件
-RUN rm -rf /app/node_modules/chart.js /app/node_modules/@kurkle/color && \
-    find /app/node_modules \( -name '*.map' -o -name '*.d.ts' -o -name 'README*' \
-      -o -name 'CHANGELOG*' -o -name 'LICENSE*' \) -delete
-
-# ===== 运行阶段 =====
-FROM node:24-alpine
-
-# 安装运行时依赖
-RUN apk add --no-cache dumb-init
-
-WORKDIR /app
-
-# 从构建阶段复制 package.json（用于 npm start 等元数据）
-COPY --from=builder /app/package.json ./
-
-# 从构建阶段复制已清理的 node_modules（仅生产依赖）
-COPY --from=builder /app/node_modules ./node_modules
-
-# 从构建阶段复制构建产物
-COPY --from=builder /app/dist ./dist
-
-# 创建数据目录
-RUN mkdir -p /app/data /app/logs
-
-# 环境变量
+ENV PORT=4003
 ENV NODE_ENV=production
 
-EXPOSE 8080
-
-# 使用 dumb-init 处理信号
-ENTRYPOINT ["dumb-init", "--"]
-CMD ["npm", "start"]
+CMD ["node", "dist/index.js"]

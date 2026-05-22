@@ -1,13 +1,13 @@
-version: '3.8'
-
 services:
-  mimo-proxy:
+  mimo2api-fix:
     build: .
+    container_name: mimo2api-fix
+    restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "4003:4003"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-    restart: unless-stopped
     environment:
+      - PORT=4003
       - NODE_ENV=production
