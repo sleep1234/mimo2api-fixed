@@ -20,9 +20,12 @@
 **核心能力**
 - 多账号负载均衡 — 自动选择最空闲账号，提升并发
 - 会话保持（Context Replay）— 减少 token 消耗，维持对话连贯
+- 智能上下文压缩 — 超长对话自动压缩旧消息为结构化摘要，保留最近上下文
 - Tool Calling — XML 工具调用自动转换为 OpenAI/Anthropic 原生格式
 - 推理内容三种模式：`passthrough` / `strip` / `separate`
 - 会话隔离：`auto`（按 IP+UA）/ `manual` / `per-request`
+- 请求超时保护 — 2 分钟 AbortController 超时，防止请求挂起
+- Thinking 回退 — 思考模式下若模型未返回正文，自动发送 fallback 防止客户端挂起
 
 **管理**
 - Web 管理面板（账号、API 密钥、请求日志、统计图表）
@@ -195,7 +198,7 @@ curl http://localhost:8080/v1/chat/completions \
 |--------|--------|------|
 | `adminKey` | `admin` | 管理面板密钥，**务必修改** |
 | `maxReplayMessages` | `20` | 会话回放消息数上限 |
-| `maxQueryChars` | `100000` | 单次请求最大字符数 |
+| `maxQueryChars` | `100000` | 单次请求最大字符数（AI Studio API 上限约 102K） |
 | `contextResetThreshold` | `150000` | 超过此 token 数重置会话（0=不限） |
 | `maxConcurrentPerAccount` | `99999` | 单账号最大并发数 |
 | `thinkMode` | `separate` | 推理内容模式 |
@@ -217,6 +220,22 @@ curl http://localhost:8080/v1/chat/completions \
 | `auto` | 按 IP + User-Agent 自动隔离，不同客户端互不干扰（推荐） |
 | `manual` | 仅在客户端提供 `x-session-id` 时隔离 |
 | `per-request` | 每次请求创建新会话（禁用记忆） |
+
+### 上下文处理
+
+当对话内容超过 `maxQueryChars` 限制时，代理采用**滑动摘要**策略：
+
+1. **系统提示词**：若超过 60% 配额，按比例截断（工具定义部分）
+2. **对话历史**：从最旧消息开始压缩为结构化摘要，保留最近消息完整
+3. **当前查询**：永远保留，不截断
+
+摘要包含：
+- 被丢弃的消息数量
+- 最近 3 条用户消息的主题
+- 工具调用统计（哪些工具被调用了几次）
+- 最近 3 条工具结果的预览
+
+这确保模型始终知道"之前做了什么"和"现在要做什么"，即使上下文很长。
 
 ## 项目结构
 

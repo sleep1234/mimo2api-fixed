@@ -113,6 +113,121 @@ function formatMessageForHistory(m: ChatMessage): string {
   return `${m.role}: ${m.content}`;
 }
 
+/**
+ * 为被丢弃的历史消息生成结构化摘要（同步、零额外调用）
+ * 提取关键信息：工具调用、工具结果、对话主题
+ */
+function buildHistorySummary(dropped: ChatMessage[]): string {
+  const toolCalls: string[] = [];
+  const toolResults: string[] = [];
+  const userTopics: string[] = [];
+
+  for (const m of dropped) {
+    if (m.role === 'assistant' && m.tool_calls?.length) {
+      for (const tc of m.tool_calls) {
+        toolCalls.push(tc.function.name);
+      }
+    }
+    if (m.role === 'tool') {
+      const name = m.name || 'unknown';
+      const preview = (m.content ?? '').slice(0, 80).replace(/\n/g, ' ');
+      toolResults.push(`${name}: ${preview}${(m.content?.length ?? 0) > 80 ? '...' : ''}`);
+    }
+    if (m.role === 'user' && m.content) {
+      // 取每条用户消息的前 60 字符作为主题
+      userTopics.push(m.content.slice(0, 60).replace(/\n/g, ' '));
+    }
+  }
+
+  const parts: string[] = [];
+  parts.push(`${dropped.length} messages dropped (oldest)`);
+
+  if (userTopics.length > 0) {
+    // 只保留最后 3 个用户主题
+    const recent = userTopics.slice(-3);
+    parts.push(`Topics discussed: ${recent.join(' → ')}`);
+  }
+  if (toolCalls.length > 0) {
+    // 去重并计数
+    const counts: Record<string, number> = {};
+    for (const t of toolCalls) counts[t] = (counts[t] || 0) + 1;
+    const summary = Object.entries(counts).map(([k, v]) => v > 1 ? `${k}×${v}` : k).join(', ');
+    parts.push(`Tools used: ${summary}`);
+  }
+  if (toolResults.length > 0) {
+    const recent = toolResults.slice(-3);
+    parts.push(`Recent results: ${recent.join('; ')}`);
+  }
+
+  return parts.join('\n');
+}
+
+/**
+ * 智能截断对话历史：保留最近消息完整，旧消息压缩为摘要
+ * 当历史过长时，从最旧的消息开始丢弃，生成结构化摘要替代
+ */
+function truncateHistoryWithSummary(
+  dialogHistory: ChatMessage[],
+  currentQuery: string,
+  maxRest: number
+): string {
+  const header = '[Conversation History]\n';
+  const summaryHeader = '[Earlier Context Summary]\n';
+  const queryPart = `\n\n[Current Query]\n${currentQuery}`;
+
+  // 先尝试直接拼接（不截断）
+  const fullHistStr = dialogHistory.map(m => formatMessageForHistory(m)).join('\n');
+  const fullRest = header + fullHistStr + queryPart;
+  if (fullRest.length <= maxRest) {
+    return fullRest;
+  }
+
+  // 需要截断：从最旧的消息开始丢弃，保留最新的
+  // 二分查找：保留最近 N 条消息
+  let lo = 0;
+  let hi = dialogHistory.length;
+  let bestKeep = 0; // 保留最近 N 条
+  let bestSummary = '';
+
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const keepMessages = dialogHistory.slice(-mid);
+    const droppedMessages = dialogHistory.slice(0, -mid);
+
+    let histStr: string;
+    if (droppedMessages.length > 0) {
+      const summary = buildHistorySummary(droppedMessages);
+      const keepStr = keepMessages.map(m => formatMessageForHistory(m)).join('\n');
+      histStr = summaryHeader + summary + '\n\n' + keepStr;
+    } else {
+      histStr = keepMessages.map(m => formatMessageForHistory(m)).join('\n');
+    }
+
+    const totalLen = header.length + histStr.length + queryPart.length;
+    if (totalLen <= maxRest) {
+      bestKeep = mid;
+      bestSummary = histStr;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+
+  // 如果连 0 条都放不下（只有当前查询就超了），直接返回当前查询
+  if (bestKeep === 0 && dialogHistory.length > 0) {
+    const summary = buildHistorySummary(dialogHistory);
+    const histStr = summaryHeader + summary;
+    const totalLen = header.length + histStr.length + queryPart.length;
+    if (totalLen <= maxRest) {
+      return header + histStr + queryPart;
+    }
+    // 摘要也放不下，只返回当前查询
+    return queryPart.trim();
+  }
+
+  return header + bestSummary + queryPart;
+}
+
 export function serializeMessages(messages: ChatMessage[]): string {
   // 先清理所有消息内容
   const sanitizedMessages = messages.map(m => ({
@@ -134,14 +249,6 @@ export function serializeMessages(messages: ChatMessage[]): string {
   const dialogHistory = nonSystem.slice(0, -1);
   const lastMsg = nonSystem[nonSystem.length - 1];
 
-  const restParts: string[] = [];
-  if (dialogHistory.length > 0) {
-    const histStr = dialogHistory.map(m => formatMessageForHistory(m)).join('\n');
-    restParts.push(`[Conversation History]\n${histStr}`);
-  }
-  if (lastMsg) restParts.push(`[Current Query]\n${formatMessageForHistory(lastMsg)}`);
-  const restStr = restParts.join('\n\n');
-
   // Truncate system prompt if too long (max 60%)
   let finalSysStr = sysStr;
   let maxRest = config.maxQueryChars - (sysStr ? sysStr.length + 2 : 0);
@@ -156,19 +263,34 @@ export function serializeMessages(messages: ChatMessage[]): string {
     });
   }
 
-  // Truncate rest if needed
+  // Build current query
+  const currentQuery = lastMsg ? formatMessageForHistory(lastMsg) : '';
+
+  // Build rest with smart history truncation
+  let restStr: string;
+  if (dialogHistory.length > 0 && maxRest > 0) {
+    restStr = truncateHistoryWithSummary(dialogHistory, currentQuery, maxRest);
+  } else if (lastMsg) {
+    restStr = `[Current Query]\n${currentQuery}`;
+  } else {
+    restStr = '';
+  }
+
+  // Final truncation safety net (should rarely trigger)
   const truncatedRest = maxRest > 0 && restStr.length > maxRest
-    ? '...(history truncated)\n\n' + restStr.slice(-maxRest + 30)
+    ? restStr.slice(-maxRest)
     : restStr;
 
   const result = finalSysStr ? `${finalSysStr}\n\n${truncatedRest}` : truncatedRest;
 
+  const hasSummary = restStr.includes('[Earlier Context Summary]');
   console.log('[SERIALIZE] Message sizes:', {
     systemPrompt: finalSysStr.length,
+    historyMessages: dialogHistory.length,
     restStr: restStr.length,
     total: result.length,
     maxAllowed: config.maxQueryChars,
-    exceeded: result.length > config.maxQueryChars
+    usedSummary: hasSummary
   });
 
   return result;
