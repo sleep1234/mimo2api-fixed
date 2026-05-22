@@ -642,7 +642,7 @@ function parseDirectToolNameFormat(text: string): ParsedToolCall[] {
   let match: RegExpExecArray | null;
   let count = 0;
 
-  const excludedTags = ['div', 'span', 'p', 'a', 'img', 'br', 'hr', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'code', 'pre', 'blockquote', 'strong', 'em', 'b', 'i', 'u', 'todo', 'todo_list', 'thinking', 'result', 'task_progress', 'path', 'name', 'content', 'question', 'options'];
+  const excludedTags = ['div', 'span', 'p', 'a', 'img', 'br', 'hr', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'code', 'pre', 'blockquote', 'strong', 'em', 'b', 'i', 'u', 'think', 'thinking', 'result', 'task_progress', 'path', 'name', 'content', 'question', 'options'];
 
   while ((match = directToolRe.exec(cleanText)) !== null) {
     if (++count > CONFIG.MAX_TOOL_CALLS) {
@@ -774,38 +774,42 @@ export function parseToolCalls(text: string): ParsedToolCall[] {
 
   // 清理不可见字符
   const cleanText = cleanInvisibleChars(text);
-  
-  console.log('[PARSE:DEBUG] Tool call text preview:', cleanText.slice(0, 500));
+
+  // 剥离 <think>...</think> 块（防止 thinking 内容被误解析为工具调用）
+  const textWithoutThink = cleanText.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  const parseText = textWithoutThink || cleanText;
+
+  console.log('[PARSE:DEBUG] Tool call text preview:', parseText.slice(0, 500));
 
   // 检测格式并解析
   let calls: ParsedToolCall[] = [];
 
-  if (cleanText.includes('<tool_call') || cleanText.includes('<toolcall')) {
-    calls = parseMimoNativeToolCalls(cleanText);
+  if (parseText.includes('<tool_call') || parseText.includes('<toolcall')) {
+    calls = parseMimoNativeToolCalls(parseText);
     log('info', `Parsed ${calls.length} MiMo native tool calls`);
     console.log('[PARSE:DEBUG] Parsed calls:', JSON.stringify(calls, null, 2));
-  } else if (cleanText.includes('<function_calls>')) {
-    calls = parseAnthropicToolCalls(cleanText);
+  } else if (parseText.includes('<function_calls>')) {
+    calls = parseAnthropicToolCalls(parseText);
     log('info', `Parsed ${calls.length} Anthropic tool calls`);
     console.log('[PARSE:DEBUG] Parsed calls:', JSON.stringify(calls, null, 2));
-  } else if (cleanText.includes('{"action"') || cleanText.includes('{ "action"') ||
-             (cleanText.includes('{') && cleanText.includes('"action"'))) {
+  } else if (parseText.includes('{"action"') || parseText.includes('{ "action"') ||
+             (parseText.includes('{') && parseText.includes('"action"'))) {
     // JSON 格式 - 使用更宽松的检测，支持 { 和 "action" 之间有换行
-    calls = parseJsonToolCalls(cleanText);
+    calls = parseJsonToolCalls(parseText);
     if (calls.length > 0) {
       log('info', `Parsed ${calls.length} JSON format tool calls`);
       console.log('[PARSE:DEBUG] Parsed calls:', JSON.stringify(calls, null, 2));
     }
-  } else if (cleanText.includes('"name"') && cleanText.includes('"arguments"')) {
+  } else if (parseText.includes('"name"') && parseText.includes('"arguments"')) {
     // {"name": "ToolName", "arguments": {...}} 格式（MiMo 未包裹 <tool_call> 时）
-    calls = parseNamedJsonToolCalls(cleanText);
+    calls = parseNamedJsonToolCalls(parseText);
     if (calls.length > 0) {
       log('info', `Parsed ${calls.length} named JSON format tool calls`);
       console.log('[PARSE:DEBUG] Parsed calls:', JSON.stringify(calls, null, 2));
     }
   } else {
     // 尝试直接工具名格式
-    calls = parseDirectToolNameFormat(cleanText);
+    calls = parseDirectToolNameFormat(parseText);
     if (calls.length > 0) {
       log('info', `Parsed ${calls.length} direct tool name format calls`);
       console.log('[PARSE:DEBUG] Parsed calls:', JSON.stringify(calls, null, 2));
@@ -813,8 +817,8 @@ export function parseToolCalls(text: string): ParsedToolCall[] {
   }
 
   // 终极回退：如果所有解析器都失败，尝试 {"name": "...", "arguments": {...}} 格式
-  if (calls.length === 0 && cleanText.includes('"name"') && cleanText.includes('"arguments"')) {
-    calls = parseNamedJsonToolCalls(cleanText);
+  if (calls.length === 0 && parseText.includes('"name"') && parseText.includes('"arguments"')) {
+    calls = parseNamedJsonToolCalls(parseText);
     if (calls.length > 0) {
       log('info', `Parsed ${calls.length} named JSON format tool calls (fallback)`);
       console.log('[PARSE:DEBUG] Parsed calls:', JSON.stringify(calls, null, 2));
@@ -846,51 +850,56 @@ export function parseToolCalls(text: string): ParsedToolCall[] {
 export function findEarliestToolCallMarker(text: string): number {
   if (!text || typeof text !== 'string') return -1;
   const cleanText = cleanInvisibleChars(text);
+
+  // 剥离 <think> 块后再检测
+  const stripped = cleanText.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  const checkText = stripped || cleanText;
+
   const checks: number[] = [];
 
   // 1. <function_calls>
-  let idx = cleanText.indexOf('<function_calls>');
+  let idx = checkText.indexOf('<function_calls>');
   if (idx !== -1) checks.push(idx);
 
   // 2. <tool_call> 或 <toolcall
-  idx = cleanText.indexOf('<tool_call>');
-  if (idx === -1) idx = cleanText.indexOf('<toolcall');
+  idx = checkText.indexOf('<tool_call>');
+  if (idx === -1) idx = checkText.indexOf('<toolcall');
   if (idx !== -1) checks.push(idx);
 
   // 3. 直接工具名标签格式（如 <todo_write>, <run_command> 等）
   const directToolPattern = /<([a-z_][a-z0-9_]*)\s*>/i;
-  const directMatch = cleanText.match(directToolPattern);
+  const directMatch = checkText.match(directToolPattern);
   if (directMatch) {
     const tagName = directMatch[1].toLowerCase();
-    const excludedTags = ['div', 'span', 'p', 'a', 'img', 'br', 'hr', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'code', 'pre', 'blockquote', 'strong', 'em', 'b', 'i', 'u', 'thinking', 'result', 'task_progress', 'path', 'name', 'content', 'question', 'options'];
+    const excludedTags = ['div', 'span', 'p', 'a', 'img', 'br', 'hr', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'code', 'pre', 'blockquote', 'strong', 'em', 'b', 'i', 'u', 'think', 'thinking', 'result', 'task_progress', 'path', 'name', 'content', 'question', 'options'];
     if (!excludedTags.includes(tagName)) {
-      checks.push(cleanText.indexOf(directMatch[0]));
+      checks.push(checkText.indexOf(directMatch[0]));
     }
   }
 
   // 4. JSON 格式 {"action": ...}
-  if (cleanText.includes('{"action"')) {
-    checks.push(cleanText.indexOf('{"action"'));
-  } else if (cleanText.includes('{ "action"')) {
-    checks.push(cleanText.indexOf('{ "action"'));
-  } else if (cleanText.includes('{') && cleanText.includes('"action"')) {
-    const openBrace = cleanText.indexOf('{');
-    const actionPos = cleanText.indexOf('"action"');
+  if (checkText.includes('{"action"')) {
+    checks.push(checkText.indexOf('{"action"'));
+  } else if (checkText.includes('{ "action"')) {
+    checks.push(checkText.indexOf('{ "action"'));
+  } else if (checkText.includes('{') && checkText.includes('"action"')) {
+    const openBrace = checkText.indexOf('{');
+    const actionPos = checkText.indexOf('"action"');
     if (actionPos > openBrace) {
-      const between = cleanText.slice(openBrace + 1, actionPos);
+      const between = checkText.slice(openBrace + 1, actionPos);
       if (/^\s*$/.test(between)) checks.push(openBrace);
     }
   }
 
   // 5. {"name": 格式（MiMo 未包裹 <tool_call> 标签时的输出）
-  const namedJsonMatch = cleanText.match(/\{\s*"name"\s*:\s*"[A-Z]/);
+  const namedJsonMatch = checkText.match(/\{\s*"name"\s*:\s*"[A-Z]/);
   if (namedJsonMatch && namedJsonMatch.index !== undefined) {
     checks.push(namedJsonMatch.index);
   }
 
   // 6. bash 代码块标记
   ['```bash', '```sh', '```shell'].forEach(prefix => {
-    idx = cleanText.indexOf(prefix);
+    idx = checkText.indexOf(prefix);
     if (idx !== -1) checks.push(idx);
   });
 
@@ -902,23 +911,27 @@ export function hasToolCallMarker(text: string): boolean {
   if (!text || typeof text !== 'string') return false;
   const cleanText = cleanInvisibleChars(text);
 
+  // 剥离 <think> 块后再检测
+  const stripped = cleanText.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  const checkText = stripped || cleanText;
+
   // 检查标准格式
-  if (cleanText.includes('<tool_call') || cleanText.includes('<toolcall') || cleanText.includes('<function_calls>')) {
+  if (checkText.includes('<tool_call') || checkText.includes('<toolcall') || checkText.includes('<function_calls>')) {
     return true;
   }
 
   // 检查 JSON 格式的工具调用（如 {"action": "ToolName", "args": {...}}）
   // 使用更宽松的检测：只要包含 {"action": 或 { 和 "action" 就认为可能是工具调用
-  if (cleanText.includes('{"action"') || cleanText.includes('{ "action"')) {
+  if (checkText.includes('{"action"') || checkText.includes('{ "action"')) {
     return true;
   }
 
   // 检查 { 和 "action" 之间只有空白字符的情况（支持换行）
-  if (cleanText.includes('{') && cleanText.includes('"action"')) {
-    const openBrace = cleanText.indexOf('{');
-    const actionPos = cleanText.indexOf('"action"');
+  if (checkText.includes('{') && checkText.includes('"action"')) {
+    const openBrace = checkText.indexOf('{');
+    const actionPos = checkText.indexOf('"action"');
     if (actionPos > openBrace) {
-      const between = cleanText.slice(openBrace + 1, actionPos);
+      const between = checkText.slice(openBrace + 1, actionPos);
       if (/^\s*$/.test(between)) {
         return true;
       }
@@ -927,19 +940,19 @@ export function hasToolCallMarker(text: string): boolean {
 
   // 检查直接工具名标签格式（如 <todo_write>, <run_command> 等）
   const directToolPattern = /<([a-z_][a-z0-9_]*)\s*>/i;
-  const match = cleanText.match(directToolPattern);
+  const match = checkText.match(directToolPattern);
   if (match) {
     const tagName = match[1].toLowerCase();
     // 排除常见的 HTML/Markdown 标签
-    const excludedTags = ['div', 'span', 'p', 'a', 'img', 'br', 'hr', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'code', 'pre', 'blockquote', 'strong', 'em', 'b', 'i', 'u', 'thinking', 'result', 'task_progress', 'path', 'name', 'content', 'question', 'options'];
+    const excludedTags = ['div', 'span', 'p', 'a', 'img', 'br', 'hr', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'code', 'pre', 'blockquote', 'strong', 'em', 'b', 'i', 'u', 'think', 'thinking', 'result', 'task_progress', 'path', 'name', 'content', 'question', 'options'];
     if (!excludedTags.includes(tagName)) {
       return true;
     }
   }
 
   // 检查 {"name": 格式（MiMo 未包裹 <tool_call> 标签时的输出）
-  if (cleanText.includes('"name"') && cleanText.includes('"arguments"')) {
-    const namedJsonMatch = cleanText.match(/\{\s*"name"\s*:\s*"[A-Z]/);
+  if (checkText.includes('"name"') && checkText.includes('"arguments"')) {
+    const namedJsonMatch = checkText.match(/\{\s*"name"\s*:\s*"[A-Z]/);
     if (namedJsonMatch) return true;
   }
 
