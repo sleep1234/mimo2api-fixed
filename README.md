@@ -1,8 +1,10 @@
-# MiMo Proxy
+# MiMo Proxy (mimo2api-fix)
 
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-green.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5+-3178C6.svg)](https://www.typescriptlang.org/)
+
+> 本仓库代码参考自原仓库：[GoblinHonest/mimo2api_mimoapi](https://github.com/GoblinHonest/mimo2api_mimoapi)，在此基础上修复了多个 Bug 并增加了智能上下文压缩等功能。
 
 将小米 MiMo AI 转换为 OpenAI / Anthropic 兼容 API 的代理服务。支持多账号负载均衡、会话保持、Tool Calling，可直接对接各类 AI 编程客户端。
 
