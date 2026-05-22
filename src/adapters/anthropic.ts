@@ -359,11 +359,20 @@ export function registerAnthropic(app: Hono) {
                 }
                 if (!pastThink && thinkingStarted) {
                   pastThink = true;
+                  // Emit buffered thinking content
                   if (config.thinkMode === 'separate') {
+                    if (thinkBuf) {
+                      await sendEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: thinkBuf } });
+                    }
                     await sendEvent('content_block_stop', { type: 'content_block_stop', index: 0 });
                     await sendEvent('content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } });
                   } else if (config.thinkMode === 'passthrough') {
                     await sendEvent('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '<think>' + thinkBuf + '</think>' } });
+                  }
+                  // Emit empty content to prevent client hang when response is thinking-only
+                  if (!toolCallBuf && !pendingText) {
+                    const idx = config.thinkMode === 'separate' ? 1 : 0;
+                    await sendEvent('content_block_delta', { type: 'content_block_delta', index: idx, delta: { type: 'text_delta', text: '' } });
                   }
                 }
                 if (pendingText) {

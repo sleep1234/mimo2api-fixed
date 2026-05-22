@@ -85,20 +85,14 @@ function isMessageContinuation(currentMessages: any[], lastFingerprint: string):
   const nonSystemMessages = currentMessages.filter(m => m.role !== 'system');
   if (nonSystemMessages.length < 2) return false;
 
-  for (let i = nonSystemMessages.length; i >= 1; i--) {
-    const slice = nonSystemMessages.slice(0, i);
-    const sliceWithSystem = currentMessages.filter(m => m.role === 'system').concat(slice);
-    const sliceFingerprint = calculateMessageFingerprint(sliceWithSystem);
+  // Only check if removing the LAST message matches (most common case)
+  // This is O(1) fingerprint calculations instead of O(n)
+  const withoutLast = nonSystemMessages.slice(0, -1);
+  const systemMessages = currentMessages.filter(m => m.role === 'system');
+  const candidate = [...systemMessages, ...withoutLast];
+  const candidateFingerprint = calculateMessageFingerprint(candidate);
 
-    console.log(`[SESSION] Checking slice [0:${i}] (${i} non-system msgs), fingerprint: ${sliceFingerprint.slice(0, 16)}... vs ${lastFingerprint.slice(0, 16)}...`);
-
-    if (sliceFingerprint === lastFingerprint) {
-      console.log('[SESSION] ✓ Found continuation at message index:', i);
-      return true;
-    }
-  }
-
-  return false;
+  return candidateFingerprint === lastFingerprint;
 }
 
 function extractMessageCount(fingerprint: string): string {

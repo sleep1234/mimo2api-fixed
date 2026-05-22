@@ -371,7 +371,16 @@ export function registerOpenAI(app: Hono) {
               } else if (chunk.type === 'finish') {
                 if (!pastThink && thinkingStarted) {
                   pastThink = true;
-                  if (config.thinkMode === 'passthrough') await sendDelta({ content: '<think>' + thinkBuf + '</think>' });
+                  // Emit buffered thinking content as reasoning_content or passthrough
+                  if (config.thinkMode === 'separate' && thinkBuf) {
+                    await sendDelta({ reasoning_content: thinkBuf });
+                  } else if (config.thinkMode === 'passthrough') {
+                    await sendDelta({ content: '<think>' + thinkBuf + '</think>' });
+                  }
+                  // Emit empty content to prevent client hang when response is thinking-only
+                  if (!toolCallBuf && !pendingText) {
+                    await sendDelta({ content: '' });
+                  }
                 }
                 if (pendingText) {
                   if (toolCallBuf !== null) toolCallBuf += pendingText;

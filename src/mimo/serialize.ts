@@ -125,33 +125,27 @@ export function serializeMessages(messages: ChatMessage[]): string {
   const truncated = rest.slice(-config.maxReplayMessages);
   const msgs = [...system, ...truncated];
 
-  const parts: string[] = [];
-
+  // Build system instruction ONCE
   const sysContent = system.map(m => m.content).join('\n');
-  if (sysContent) parts.push(`[System Instruction]\n${sysContent}`);
+  const sysStr = sysContent ? `[System Instruction]\n${sysContent}` : '';
 
+  // Build non-system parts (WITHOUT duplicating system)
   const nonSystem = msgs.filter(m => m.role !== 'system');
   const dialogHistory = nonSystem.slice(0, -1);
   const lastMsg = nonSystem[nonSystem.length - 1];
 
+  const restParts: string[] = [];
   if (dialogHistory.length > 0) {
     const histStr = dialogHistory.map(m => formatMessageForHistory(m)).join('\n');
-    parts.push(`[Conversation History]\n${histStr}`);
+    restParts.push(`[Conversation History]\n${histStr}`);
   }
+  if (lastMsg) restParts.push(`[Current Query]\n${formatMessageForHistory(lastMsg)}`);
+  const restStr = restParts.join('\n\n');
 
-  if (lastMsg) parts.push(`[Current Query]\n${formatMessageForHistory(lastMsg)}`);
-
-  // 强制截断以确保不超过 MiMo 限制
-  const sysStr = sysContent ? `[System Instruction]\n${sysContent}` : '';
-  const restStr = parts.slice(sysContent ? 1 : 0).join('\n\n');
-
-  // 计算剩余可用空间
-  let maxRest = config.maxQueryChars - sysStr.length - 2;
-
-  // 如果 system prompt 本身就超长，需要截断它
+  // Truncate system prompt if too long (max 60%)
   let finalSysStr = sysStr;
+  let maxRest = config.maxQueryChars - (sysStr ? sysStr.length + 2 : 0);
   if (sysStr.length > config.maxQueryChars * 0.6) {
-    // System prompt 最多占 60%
     const maxSys = Math.floor(config.maxQueryChars * 0.6);
     finalSysStr = sysStr.slice(0, maxSys) + '\n...(tool definitions truncated)';
     maxRest = config.maxQueryChars - finalSysStr.length - 2;
@@ -162,20 +156,16 @@ export function serializeMessages(messages: ChatMessage[]): string {
     });
   }
 
-  // 截断对话历史和当前消息
+  // Truncate rest if needed
   const truncatedRest = maxRest > 0 && restStr.length > maxRest
     ? '...(history truncated)\n\n' + restStr.slice(-maxRest + 30)
     : restStr;
 
   const result = finalSysStr ? `${finalSysStr}\n\n${truncatedRest}` : truncatedRest;
 
-  // 打印各部分大小
   console.log('[SERIALIZE] Message sizes:', {
     systemPrompt: finalSysStr.length,
-    dialogHistory: dialogHistory.length > 0 ? dialogHistory.map(m => `${m.role}: ${m.content ?? ''}`).join('\n').length : 0,
-    lastMessage: lastMsg?.content?.length ?? 0,
     restStr: restStr.length,
-    truncatedRest: truncatedRest.length,
     total: result.length,
     maxAllowed: config.maxQueryChars,
     exceeded: result.length > config.maxQueryChars
