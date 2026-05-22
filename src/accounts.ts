@@ -126,9 +126,16 @@ export function markAccountInactive(id: string) {
 }
 
 export function parseCurl(curl: string): { service_token: string; user_id: string; ph_token: string } | null {
+  // Try cURL format first: -b 'cookie' or -H 'Cookie: ...'
   const m1 = curl.match(/(?:-b|--cookie)\s+'([^']+)'/) ?? curl.match(/(?:-b|--cookie)\s+"([^"]+)"/);
   const m2 = curl.match(/-H\s+[Cc]ookie:\s*([^\r\n]+)/);
-  const cookies = m1?.[1] ?? m2?.[1];
+  let cookies = m1?.[1] ?? m2?.[1];
+
+  // Fallback: treat entire input as raw cookie string
+  if (!cookies && curl.includes('serviceToken=')) {
+    cookies = curl;
+  }
+
   if (!cookies) return null;
 
   const st = cookies.match(/serviceToken=["']?([^"';\s]+)["']?/);
