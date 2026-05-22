@@ -6,7 +6,7 @@ COPY package*.json ./
 RUN npm install
 
 COPY . .
-RUN npx tsc
+RUN npx tsc && mkdir -p dist/web && cp -r src/web/* dist/web/
 
 RUN npm prune --production
 
