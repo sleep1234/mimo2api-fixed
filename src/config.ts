@@ -1,7 +1,7 @@
 import { loadConfig as loadJsonConfig, saveConfig, ConfigData } from './db.js';
 
 const DEFAULTS = {
-  port: 8080,
+  port: Number(process.env.PORT) || 8080,
   adminKey: 'admin',
   maxReplayMessages: 20,
   maxQueryChars: 100000,
